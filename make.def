@@ -1,14 +1,15 @@
-# for the NVIDIA nvhpc compiler (nvc)
+# for intel compiler on linux (most exercises work with icc as well)
 # copy to make.def
+CC         = icx
+CPP         = icpx
+OPTFLAGS   = -fsycl -qopenmp -O3
 
-CC          = nvc
 CLINKER     = $(CC)
-OPTFLAGS    = -fast -mp=gpu -gpu=cc75
-LIBS        =
-PRE         = ./
+LIBS        = -lm
 
 CFLAGS    = $(OPTFLAGS)
-
+PRE= ./
 OBJ=o
 EXE=
-RM=rm -f
+RM=rm
+

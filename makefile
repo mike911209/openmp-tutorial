@@ -9,11 +9,15 @@ include make.def
 EXES= pi$(EXE) jac_solv$(EXE) vadd$(EXE) vadd_heap$(EXE) heat$(EXE) heat_map$(EXE) mm_testbed$(EXE)
 
 JAC_OBJS  = jac_solv.$(OBJ) mm_utils.$(OBJ)
+JAC_SYCL_OBJS  = jac_solv_sycl.$(OBJ) mm_utils.$(OBJ)
 
 all: $(EXES)
 
 jac_solv$(EXE): $(JAC_OBJS) mm_utils.h
-	$(CLINKER) $(CFLAGS) -o jac_solv$(EXE) $(JAC_OBJS) $(LIBS)
+	$(CPP) $(CFLAGS) -o jac_solv$(EXE) $(JAC_OBJS) $(LIBS)
+
+jac_solv_sycl$(EXE): $(JAC_SYCL_OBJS) mm_utils.h
+	$(CPP) -fsycl $(CFLAGS) -o jac_solv_sycl$(EXE) $(JAC_SYCL_OBJS) $(LIBS)
 
 pi$(EXE): pi.$(OBJ)
 	$(CLINKER) $(OPTFLAGS) -o pi$(EXE) pi.$(OBJ) $(LIBS)
@@ -50,4 +54,4 @@ jac_solv.$(OBJ) : mm_utils.h
 	$(CC) $(CFLAGS) -c $<
 
 .cpp.$(OBJ):
-	$(CC) $(CFLAGS) -c $<
+	$(CPP) $(CFLAGS) -c $<

@@ -5,6 +5,7 @@
 *.o*
 
 jac_solv
+jac_solv_sycl
 pi
 vadd
 jac_solv_coal

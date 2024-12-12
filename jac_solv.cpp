@@ -34,6 +34,7 @@
 #include <math.h>
 #include <omp.h>
 #include <stdlib.h>
+#include <chrono>
 // and some key constants used in this program
 //(such as TYPE)
 
@@ -42,7 +43,7 @@
 #define MAX_ITERS 100000
 #define LARGE 1000000.0
 
-//#define DEBUG    1     // output a small subset of intermediate values
+#define DEBUG    1     // output a small subset of intermediate values
 //#define VERBOSE  1
 
 int main(int argc, char **argv) {
@@ -51,6 +52,9 @@ int main(int argc, char **argv) {
   double start_time, elapsed_time;
   TYPE err, chksum;
   TYPE *A, *b, *xnew, *xold;
+
+  // start timing
+	auto start = std::chrono::steady_clock::now();
 
   // set matrix dimensions and allocate memory for matrices
   if (argc == 2) {
@@ -146,10 +150,18 @@ int main(int argc, char **argv) {
     err += tmp * tmp;
   }
   err = sqrt((double)err);
+
+  // stop timing
+  auto end = std::chrono::steady_clock::now();
+
   printf("jacobi solver: err = %f, solution checksum = %f \n", (float)err,
          (float)chksum);
   if (err > TOLERANCE)
     printf("\nWARNING: final solution error > %g\n\n", TOLERANCE);
+
+  // print elapsed time
+  std::chrono::duration<double> elapsed_seconds = end - start;
+  printf("elapsed time: %f seconds\n", elapsed_seconds.count());
 
   free(A);
   free(b);
