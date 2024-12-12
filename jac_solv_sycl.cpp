@@ -109,7 +109,7 @@ int main(int argc, char **argv)
 	int iters;
 	double start_time, elapsed_time;
 	TYPE err, chksum;
-	TYPE *A, *b, *xnew, *xold;
+	// TYPE *A, *b, *xnew, *xold;
 	TYPE *d_A, *d_b, *d_xnew, *d_xold;
 
 	// cpu queue
@@ -131,10 +131,14 @@ int main(int argc, char **argv)
 
 	printf(" ndim = %d\n", Ndim);
 
-	A = (TYPE *)malloc(Ndim * Ndim * sizeof(TYPE));
-	b = (TYPE *)malloc(Ndim * sizeof(TYPE));
-	xnew = (TYPE *)malloc(Ndim * sizeof(TYPE));
-	xold = (TYPE *)malloc(Ndim * sizeof(TYPE));
+	// A = (TYPE *)malloc(Ndim * Ndim * sizeof(TYPE));
+	// b = (TYPE *)malloc(Ndim * sizeof(TYPE));
+	// xnew = (TYPE *)malloc(Ndim * sizeof(TYPE));
+	// xold = (TYPE *)malloc(Ndim * sizeof(TYPE));
+	TYPE A[Ndim * Ndim];
+	TYPE b[Ndim];
+	TYPE xnew[Ndim];
+	TYPE xold[Ndim];
 
 	// malloc on device
 	// d_A = sycl::malloc_device<TYPE>(Ndim * Ndim, q);
@@ -142,11 +146,11 @@ int main(int argc, char **argv)
 	// d_xnew = sycl::malloc_device<TYPE>(Ndim, q);
 	// d_xold = sycl::malloc_device<TYPE>(Ndim, q);
 
-	if (!A || !b || !xold || !xnew)
-	{
-		printf("\n memory allocation error\n");
-		exit(-1);
-	}
+	// if (!A || !b || !xold || !xnew)
+	// {
+	// 	printf("\n memory allocation error\n");
+	// 	exit(-1);
+	// }
 
 	// q.memcpy(d_A, A, Ndim * Ndim * sizeof(TYPE));
 
@@ -349,10 +353,10 @@ int main(int argc, char **argv)
 	std::chrono::duration<double> elapsed_seconds = end - start;
 	printf("elapsed time: %f seconds\n", elapsed_seconds.count());
 
-	free(A);
-	free(b);
-	free(xold);
-	free(xnew);
+	// free(A);
+	// free(b);
+	// free(xold);
+	// free(xnew);
 	// sycl::free(d_A, q);
 	// sycl::free(d_b, q);
 	// sycl::free(d_xold, q);
