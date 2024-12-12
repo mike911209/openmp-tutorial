@@ -117,31 +117,31 @@ void reduce(sycl::nd_item<1> item, TYPE *d_conv, TYPE *d_conv_reduce, int size)
 	int idx = item.get_local_id(0);
 	int cal_size = size / 2;
 
-	// while (cal_size > 0)
-	// {
-	// 	if (idx < cal_size)
-	// 	{
-	// 		d_conv_reduce[idx] += d_conv_reduce[idx + cal_size];
-	// 	}
-	// 	cal_size /= 2;
-
-	// 	sycl::group_barrier(item.get_group());
-	// }
-
-	// if (idx == 0) d_conv[0] = d_conv_reduce[0];
-
-	if (idx == 0)
+	while (cal_size > 0)
 	{
-		d_conv[0] = 0;
-
-		for (int i = 0; i < size; i++)
+		if (idx < cal_size)
 		{
-			// out << "d_conv_reduce[" << i << "] = " << d_conv_reduce[i] << "\n";
-			d_conv[0] += d_conv_reduce[i];
+			d_conv_reduce[idx] += d_conv_reduce[idx + cal_size];
 		}
+		cal_size /= 2;
 
-		// out << "d_conv[0] = " << d_conv[0] << "\n";
+		sycl::group_barrier(item.get_group());
 	}
+
+	if (idx == 0) d_conv[0] = d_conv_reduce[0];
+
+	// if (idx == 0)
+	// {
+	// 	d_conv[0] = 0;
+
+	// 	for (int i = 0; i < size; i++)
+	// 	{
+	// 		out << "d_conv_reduce[" << i << "] = " << d_conv_reduce[i] << "\n";
+	// 		d_conv[0] += d_conv_reduce[i];
+	// 	}
+
+	// 	out << "d_conv[0] = " << d_conv[0] << "\n";
+	// }
 }
 
 int main(int argc, char **argv)
