@@ -2,7 +2,7 @@
 # copy to make.def
 CC         = icx
 CPP         = icpx
-OPTFLAGS   = -fsycl -qopenmp -O3
+OPTFLAGS   = -fsycl -fsycl-targets=nvptx64-nvidia-cuda -qopenmp -O3
 
 CLINKER     = $(CC)
 LIBS        = -lm

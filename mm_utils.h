@@ -1,4 +1,4 @@
-#include <omp.h>
+// #include <omp.h>
 #include <stdio.h>
 #include <stdlib.h>
 #define AVAL 3.0

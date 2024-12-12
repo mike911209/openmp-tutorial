@@ -79,7 +79,7 @@ void init_diag_dom_near_identity_matrix_sycl(int Ndim, TYPE *A, sycl::id<1> idx,
 	}
 }
 
-void jalc_solver_main(sycl::nd_item<1> item, int Ndim, TYPE* A, TYPE* b, TYPE* d_xnew, TYPE* d_xold, TYPE* d_conv, sycl::stream out)
+void jalc_solver_main(sycl::nd_item<1> item, int Ndim, TYPE* A, TYPE* b, TYPE* d_xnew, TYPE* d_xold, TYPE* d_conv)
 {
 	// since global size is the same as work group size, we can use local id as index
 	int idx = item.get_local_id(0);
@@ -94,7 +94,7 @@ void jalc_solver_main(sycl::nd_item<1> item, int Ndim, TYPE* A, TYPE* b, TYPE* d
 	}
 	d_xnew[idx] = (b[idx] - d_xnew[idx]) / A[idx * Ndim + idx];
 
-	item.barrier();
+	sycl::group_barrier(item.get_group());
 
 	// test convergence
 	TYPE tmp = d_xnew[idx] - d_xold[idx];
@@ -109,11 +109,15 @@ int main(int argc, char **argv)
 	int iters;
 	double start_time, elapsed_time;
 	TYPE err, chksum;
-	// TYPE *A, *b, *xnew, *xold;
+	TYPE *A, *b, *xnew, *xold;
 	TYPE *d_A, *d_b, *d_xnew, *d_xold;
 
 	// cpu queue
-	sycl::queue q;
+	// sycl::queue q;
+	// std::cout << "Running on " << q.get_device().get_info<sycl::info::device::name>() << "\n";
+
+	// gpu queue
+	sycl::queue q(sycl::gpu_selector_v);
 	std::cout << "Running on " << q.get_device().get_info<sycl::info::device::name>() << "\n";
 
 	// start timing
@@ -131,20 +135,20 @@ int main(int argc, char **argv)
 
 	printf(" ndim = %d\n", Ndim);
 
-	// A = (TYPE *)malloc(Ndim * Ndim * sizeof(TYPE));
-	// b = (TYPE *)malloc(Ndim * sizeof(TYPE));
-	// xnew = (TYPE *)malloc(Ndim * sizeof(TYPE));
-	// xold = (TYPE *)malloc(Ndim * sizeof(TYPE));
-	TYPE A[Ndim * Ndim];
-	TYPE b[Ndim];
-	TYPE xnew[Ndim];
-	TYPE xold[Ndim];
+	A = (TYPE *)malloc(Ndim * Ndim * sizeof(TYPE));
+	b = (TYPE *)malloc(Ndim * sizeof(TYPE));
+	xnew = (TYPE *)malloc(Ndim * sizeof(TYPE));
+	xold = (TYPE *)malloc(Ndim * sizeof(TYPE));
+	// TYPE A[Ndim * Ndim];
+	// TYPE b[Ndim];
+	// TYPE xnew[Ndim];
+	// TYPE xold[Ndim];
 
 	// malloc on device
-	// d_A = sycl::malloc_device<TYPE>(Ndim * Ndim, q);
-	// d_b = sycl::malloc_device<TYPE>(Ndim, q);
-	// d_xnew = sycl::malloc_device<TYPE>(Ndim, q);
-	// d_xold = sycl::malloc_device<TYPE>(Ndim, q);
+	d_A = sycl::malloc_device<TYPE>(Ndim * Ndim, q);
+	d_b = sycl::malloc_device<TYPE>(Ndim, q);
+	d_xnew = sycl::malloc_device<TYPE>(Ndim, q);
+	d_xold = sycl::malloc_device<TYPE>(Ndim, q);
 
 	// if (!A || !b || !xold || !xnew)
 	// {
@@ -185,24 +189,25 @@ int main(int argc, char **argv)
 		b[i] = (TYPE)(rand() % 51) / 100.0;
 	}
 
-	// q.memcpy(d_A, A, Ndim * Ndim * sizeof(TYPE));
-	// q.memcpy(d_b, b, Ndim * sizeof(TYPE));
-	// q.memset(d_xnew, 0, Ndim * sizeof(TYPE));
-	// q.memset(d_xold, 0, Ndim * sizeof(TYPE));
+	q.memcpy(d_A, A, Ndim * Ndim * sizeof(TYPE));
+	q.memcpy(d_b, b, Ndim * sizeof(TYPE));
+	q.memset(d_xnew, 0, Ndim * sizeof(TYPE));
+	q.memset(d_xold, 0, Ndim * sizeof(TYPE));
 
 	// start_time = omp_get_wtime();
 	//
 	// jacobi iterative solver
 	//
 	TYPE conv = LARGE;
-	// TYPE *d_conv = sycl::malloc_device<TYPE>(1, q);
+	TYPE *d_conv = sycl::malloc_device<TYPE>(1, q);
+	q.memset(d_conv, LARGE, sizeof(TYPE));
 	iters = 0;
 
-	sycl::buffer<TYPE> A_buf(A, sycl::range<1>(Ndim * Ndim));
-    sycl::buffer<TYPE> b_buf(b, sycl::range<1>(Ndim));
-    sycl::buffer<TYPE> xold_buf(xold, sycl::range<1>(Ndim));
-    sycl::buffer<TYPE> xnew_buf(xnew, sycl::range<1>(Ndim));
-    sycl::buffer<TYPE> conv_buf(&conv, sycl::range<1>(1));
+	// sycl::buffer<TYPE> A_buf(A, sycl::range<1>(Ndim * Ndim));
+    // sycl::buffer<TYPE> b_buf(b, sycl::range<1>(Ndim));
+    // sycl::buffer<TYPE> xold_buf(xold, sycl::range<1>(Ndim));
+    // sycl::buffer<TYPE> xnew_buf(xnew, sycl::range<1>(Ndim));
+    // sycl::buffer<TYPE> conv_buf(&conv, sycl::range<1>(1));
 
 	while ((conv > TOLERANCE) && (iters < MAX_ITERS))
 	{
@@ -215,34 +220,16 @@ int main(int argc, char **argv)
 		{
 			q.submit([&](sycl::handler &h)
 			{
-				sycl::stream out(1024, 256, h); //output buffer
-				sycl::accessor A_acc(A_buf, h);
-				sycl::accessor b_acc(b_buf, h);
-				sycl::accessor xold_acc(xold_buf, h);
-				sycl::accessor xnew_acc(xnew_buf, h);
-				sycl::accessor conv_acc(conv_buf, h);
+				// sycl::stream out(1024, 256, h); //output buffer
+				// sycl::accessor A_acc(A_buf, h);
+				// sycl::accessor b_acc(b_buf, h);
+				// sycl::accessor xold_acc(xold_buf, h);
+				// sycl::accessor xnew_acc(xnew_buf, h);
+				// sycl::accessor conv_acc(conv_buf, h);
 
-				h.parallel_for(sycl::nd_range<1>(sycl::range<1>(Ndim), sycl::range<1>(Ndim)), [=](sycl::nd_item<1> item) 
+				h.parallel_for(sycl::nd_range<1>(sycl::range<1>(Ndim), sycl::range<1>(Ndim)), [=](sycl::nd_item<1> item) [[sycl::reqd_sub_group_size(32)]]
 				{	
-					// since global size is the same as work group size, we can use local id as index
-					int idx = item.get_local_id(0);
-
-					xnew_acc[idx] = 0.0;
-
-					for (int j = 0; j < Ndim; j++)
-					{
-						if (idx != j)
-							xnew_acc[idx] += A_acc[idx * Ndim + j] * xold_acc[j];
-					}
-					xnew_acc[idx] = (b_acc[idx] - xnew_acc[idx]) / A_acc[idx * Ndim + idx];
-
-					item.barrier();
-
-					// test convergence
-					TYPE tmp = xnew_acc[idx] - xold_acc[idx];
-					tmp = tmp * tmp;
-
-					conv_acc[0] = sycl::reduce_over_group(item.get_group(), tmp, sycl::plus<TYPE>());
+					jalc_solver_main(item, Ndim, d_A, d_b, d_xnew, d_xold, d_conv);
 				}); 
 			});
 		}
@@ -250,59 +237,44 @@ int main(int argc, char **argv)
 		{
 			q.submit([&](sycl::handler &h)
 			{
-				sycl::stream out(1024, 256, h); //output buffer
-				sycl::accessor A_acc(A_buf, h);
-				sycl::accessor b_acc(b_buf, h);
-				sycl::accessor xold_acc(xold_buf, h);
-				sycl::accessor xnew_acc(xnew_buf, h);
-				sycl::accessor conv_acc(conv_buf, h);
+				// sycl::stream out(1024, 256, h); //output buffer
+				// sycl::accessor A_acc(A_buf, h);
+				// sycl::accessor b_acc(b_buf, h);
+				// sycl::accessor xold_acc(xold_buf, h);
+				// sycl::accessor xnew_acc(xnew_buf, h);
+				// sycl::accessor conv_acc(conv_buf, h);
 
-				h.parallel_for(sycl::nd_range<1>(sycl::range<1>(Ndim), sycl::range<1>(Ndim)), [=](sycl::nd_item<1> item) 
+				h.parallel_for(sycl::nd_range<1>(sycl::range<1>(Ndim), sycl::range<1>(Ndim)), [=](sycl::nd_item<1> item) [[sycl::reqd_sub_group_size(32)]]
 				{	
-					// since global size is the same as work group size, we can use local id as index
-					int idx = item.get_local_id(0);
-
-					xold_acc[idx] = 0.0;
-
-					for (int j = 0; j < Ndim; j++)
-					{
-						if (idx != j)
-							xold_acc[idx] += A_acc[idx * Ndim + j] * xnew_acc[j];
-					}
-					xold_acc[idx] = (b_acc[idx] - xold_acc[idx]) / A_acc[idx * Ndim + idx];
-
-					item.barrier();
-
-					// test convergence
-					TYPE tmp = xold_acc[idx] - xnew_acc[idx];
-					tmp = tmp * tmp;
-
-					conv_acc[0] = sycl::reduce_over_group(item.get_group(), tmp, sycl::plus<TYPE>());
+					jalc_solver_main(item, Ndim, d_A, d_b, d_xold, d_xnew, d_conv);
 				}); 
 			});
 		}
 
 		q.wait();
-		// q.memcpy(&conv, d_conv, 1 * sizeof(TYPE)).wait();
+		q.memcpy(&conv, d_conv, 1 * sizeof(TYPE)).wait();
 
 		conv = sqrt((double)conv);
 
-		// for (int i = 0; i < Ndim; i++) {
-		// 	xnew[i] = (TYPE)0.0;
-		// 	for (int j = 0; j < Ndim; j++) {
-		// 		if (i != j)
-		// 		xnew[i] += A[i * Ndim + j] * xold[j];
-		// 	}
-		// 	xnew[i] = (b[i] - xnew[i]) / A[i * Ndim + i];
-		// }
 		//
 		// test convergence
 		//
 		// conv = 0.0;
-		// for (int i = 0; i < Ndim; i++) {
-		// 	TYPE tmp = xnew[i] - xold[i];
-		// 	conv += tmp * tmp;
+		// if ((iters & 1) == 0)
+		// {
+		// 	for (int i = 0; i < Ndim; i++) {
+		// 		TYPE tmp = xnew[i] - xold[i];
+		// 		conv += tmp * tmp;
+		// 	}
 		// }
+		// else
+		// {
+		// 	for (int i = 0; i < Ndim; i++) {
+		// 		TYPE tmp = xold[i] - xnew[i];
+		// 		conv += tmp * tmp;
+		// 	}
+		// }
+
 		// conv = sqrt((double)conv);
 #ifdef DEBUG
 		printf(" conv = %f \n", (float)conv);
@@ -323,8 +295,8 @@ int main(int argc, char **argv)
 	//
 	err = (TYPE)0.0;
 	chksum = (TYPE)0.0;
-	// q.memcpy(xnew, d_xnew, Ndim * sizeof(TYPE));
-	// q.memcpy(xold, d_xold, Ndim * sizeof(TYPE)).wait();
+	q.memcpy(xnew, d_xnew, Ndim * sizeof(TYPE));
+	q.memcpy(xold, d_xold, Ndim * sizeof(TYPE)).wait();
 
 	for (int i = 0; i < Ndim; i++)
 	{
