@@ -79,28 +79,69 @@ void init_diag_dom_near_identity_matrix_sycl(int Ndim, TYPE *A, sycl::id<1> idx,
 	}
 }
 
-void jalc_solver_main(sycl::nd_item<1> item, int Ndim, TYPE* A, TYPE* b, TYPE* d_xnew, TYPE* d_xold, TYPE* d_conv)
+void jalc_solver_main(sycl::nd_item<1> item, int Ndim, TYPE* A, TYPE* b, TYPE* d_xnew, TYPE* d_xold, TYPE* d_conv, TYPE* d_conv_reduce)
 {
-	// since global size is the same as work group size, we can use local id as index
-	int idx = item.get_local_id(0);
+	// blockIdx.x * blockDim.x + threadIdx.x
+	int idx = item.get_group(0) * item.get_local_range().get(0) + item.get_local_id(0);
+	TYPE tmp;
 
-	*d_conv = 0.0;
-	d_xnew[idx] = 0.0;
-
-	for (int j = 0; j < Ndim; j++)
+	// *d_conv = 0.0;
+	if (idx < Ndim)
 	{
-		if (idx != j)
-			d_xnew[idx] += A[idx * Ndim + j] * d_xold[j];
+		d_xnew[idx] = 0.0;
+
+		for (int j = 0; j < Ndim; j++)
+		{
+			if (idx != j)
+				d_xnew[idx] += A[idx * Ndim + j] * d_xold[j];
+		}
+		d_xnew[idx] = (b[idx] - d_xnew[idx]) / A[idx * Ndim + idx];
+
+		// test convergence
+		tmp = d_xnew[idx] - d_xold[idx];
+		tmp = tmp * tmp;
 	}
-	d_xnew[idx] = (b[idx] - d_xnew[idx]) / A[idx * Ndim + idx];
+	else
+	{
+		tmp = 0.0;
+	}
 
 	sycl::group_barrier(item.get_group());
 
-	// test convergence
-	TYPE tmp = d_xnew[idx] - d_xold[idx];
-	tmp = tmp * tmp;
+	d_conv_reduce[item.get_group(0)] = sycl::reduce_over_group(item.get_group(), tmp, sycl::plus<TYPE>());
+}
 
-	*d_conv = sycl::reduce_over_group(item.get_group(), tmp, sycl::plus<TYPE>());
+void reduce(sycl::nd_item<1> item, TYPE *d_conv, TYPE *d_conv_reduce, int size)
+{
+	// reduce d_conv_reduce
+	int idx = item.get_local_id(0);
+	int cal_size = size / 2;
+
+	// while (cal_size > 0)
+	// {
+	// 	if (idx < cal_size)
+	// 	{
+	// 		d_conv_reduce[idx] += d_conv_reduce[idx + cal_size];
+	// 	}
+	// 	cal_size /= 2;
+
+	// 	sycl::group_barrier(item.get_group());
+	// }
+
+	// if (idx == 0) d_conv[0] = d_conv_reduce[0];
+
+	if (idx == 0)
+	{
+		d_conv[0] = 0;
+
+		for (int i = 0; i < size; i++)
+		{
+			// out << "d_conv_reduce[" << i << "] = " << d_conv_reduce[i] << "\n";
+			d_conv[0] += d_conv_reduce[i];
+		}
+
+		// out << "d_conv[0] = " << d_conv[0] << "\n";
+	}
 }
 
 int main(int argc, char **argv)
@@ -117,7 +158,7 @@ int main(int argc, char **argv)
 	// std::cout << "Running on " << q.get_device().get_info<sycl::info::device::name>() << "\n";
 
 	// gpu queue
-	sycl::queue q(sycl::gpu_selector_v);
+	sycl::queue q(sycl::gpu_selector_v, sycl::property::queue::in_order{});
 	std::cout << "Running on " << q.get_device().get_info<sycl::info::device::name>() << "\n";
 
 	// start timing
@@ -199,15 +240,34 @@ int main(int argc, char **argv)
 	// jacobi iterative solver
 	//
 	TYPE conv = LARGE;
-	TYPE *d_conv = sycl::malloc_device<TYPE>(1, q);
-	q.memset(d_conv, LARGE, sizeof(TYPE));
-	iters = 0;
+	int threads_per_block = 256;
+	int blocks_per_grid = ceil(Ndim / (TYPE) threads_per_block);
+	int reduce_blocks_per_grid = blocks_per_grid;
+
+	// round up to the nearest power of 2
+	reduce_blocks_per_grid--;
+	reduce_blocks_per_grid |= reduce_blocks_per_grid >> 1;
+	reduce_blocks_per_grid |= reduce_blocks_per_grid >> 2;
+	reduce_blocks_per_grid |= reduce_blocks_per_grid >> 4;
+	reduce_blocks_per_grid |= reduce_blocks_per_grid >> 8;
+	reduce_blocks_per_grid |= reduce_blocks_per_grid >> 16;
+	reduce_blocks_per_grid++;
+
+	std::cout << "blocks_per_grid: " << blocks_per_grid << " " << "reduce_blocks_per_grid: " << reduce_blocks_per_grid << "\n";
 
 	// sycl::buffer<TYPE> A_buf(A, sycl::range<1>(Ndim * Ndim));
     // sycl::buffer<TYPE> b_buf(b, sycl::range<1>(Ndim));
     // sycl::buffer<TYPE> xold_buf(xold, sycl::range<1>(Ndim));
     // sycl::buffer<TYPE> xnew_buf(xnew, sycl::range<1>(Ndim));
     // sycl::buffer<TYPE> conv_buf(&conv, sycl::range<1>(1));
+	TYPE *d_conv = sycl::malloc_device<TYPE>(1, q);
+	TYPE *d_conv_reduce = sycl::malloc_device<TYPE>(reduce_blocks_per_grid, q);
+	sycl::range<1> blocks(blocks_per_grid);
+	sycl::range<1> threads(threads_per_block);
+
+	q.memset(d_conv, LARGE, sizeof(TYPE));
+	q.memset(d_conv_reduce, 0, sizeof(TYPE) * reduce_blocks_per_grid);
+	iters = 0;
 
 	while ((conv > TOLERANCE) && (iters < MAX_ITERS))
 	{
@@ -227,9 +287,19 @@ int main(int argc, char **argv)
 				// sycl::accessor xnew_acc(xnew_buf, h);
 				// sycl::accessor conv_acc(conv_buf, h);
 
-				h.parallel_for(sycl::nd_range<1>(sycl::range<1>(Ndim), sycl::range<1>(Ndim)), [=](sycl::nd_item<1> item) [[sycl::reqd_sub_group_size(32)]]
+				h.parallel_for(sycl::nd_range<1>(blocks * threads, threads), [=](sycl::nd_item<1> item) [[sycl::reqd_sub_group_size(32)]]
 				{	
-					jalc_solver_main(item, Ndim, d_A, d_b, d_xnew, d_xold, d_conv);
+					jalc_solver_main(item, Ndim, d_A, d_b, d_xnew, d_xold, d_conv, d_conv_reduce);
+				}); 
+			});
+
+			q.submit([&](sycl::handler &h)
+			{
+				// sycl::stream out(1024, 256, h); //output buffer
+
+				h.parallel_for(sycl::nd_range<1>(reduce_blocks_per_grid / 2, reduce_blocks_per_grid / 2), [=](sycl::nd_item<1> item) [[sycl::reqd_sub_group_size(32)]]
+				{	
+					reduce(item, d_conv, d_conv_reduce, reduce_blocks_per_grid);
 				}); 
 			});
 		}
@@ -244,9 +314,19 @@ int main(int argc, char **argv)
 				// sycl::accessor xnew_acc(xnew_buf, h);
 				// sycl::accessor conv_acc(conv_buf, h);
 
-				h.parallel_for(sycl::nd_range<1>(sycl::range<1>(Ndim), sycl::range<1>(Ndim)), [=](sycl::nd_item<1> item) [[sycl::reqd_sub_group_size(32)]]
+				h.parallel_for(sycl::nd_range<1>(blocks * threads, threads), [=](sycl::nd_item<1> item) [[sycl::reqd_sub_group_size(32)]]
 				{	
-					jalc_solver_main(item, Ndim, d_A, d_b, d_xold, d_xnew, d_conv);
+					jalc_solver_main(item, Ndim, d_A, d_b, d_xold, d_xnew, d_conv, d_conv_reduce);
+				}); 
+			});
+
+			q.submit([&](sycl::handler &h)
+			{
+				// sycl::stream out(1024, 256, h); //output buffer
+
+				h.parallel_for(sycl::nd_range<1>(reduce_blocks_per_grid / 2, reduce_blocks_per_grid / 2), [=](sycl::nd_item<1> item) [[sycl::reqd_sub_group_size(32)]]
+				{	
+					reduce(item, d_conv, d_conv_reduce, reduce_blocks_per_grid);
 				}); 
 			});
 		}
