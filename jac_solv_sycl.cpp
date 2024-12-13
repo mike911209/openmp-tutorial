@@ -92,6 +92,51 @@ void init_diag_dom_near_identity_matrix_sycl(int Ndim, TYPE *A, sycl::id<1> idx,
 	}
 }
 
+void jac_solver_main(sycl::nd_item<1> item, int Ndim, int Ndim_round, TYPE* A, TYPE* b, TYPE* d_xnew, TYPE* d_xold, TYPE* A_reduce, TYPE* d_conv_reduce, int world_size)
+{
+	// blockIdx.x * blockDim.x + threadIdx.x
+	int rank = item.get_group(0) * item.get_local_range().get(0) + item.get_local_id(0);
+	TYPE tmp;
+
+	// out << rank << " " << world_size << " " << Ndim << " " << Ndim_round << "\n";
+
+	// *d_conv = 0.0;
+	for (int idx = rank; idx < Ndim * Ndim; idx += world_size)
+	{
+		int i = idx / Ndim;
+		int j = idx % Ndim;
+
+		// d_xnew[idx] = 0.0;
+
+		if (i != j)
+			A_reduce[i * Ndim_round + j] = A[i * Ndim + j] * d_xold[j];
+	}
+
+	if (rank < Ndim)
+	{
+		d_xnew[rank] = 0.0;
+
+		for (int i = 0; i < Ndim; i++)
+		{
+			d_xnew[rank] += A_reduce[rank * Ndim_round + i];
+			// if (idx == 0) out << d_xnew[idx] << "\n";
+		}
+		d_xnew[rank] = (b[rank] - d_xnew[rank]) / A[rank * Ndim + rank];
+
+		// test convergence
+		tmp = d_xnew[rank] - d_xold[rank];
+		tmp = tmp * tmp;
+	}
+	else
+	{
+		tmp = 0.0;
+	}
+
+	sycl::group_barrier(item.get_group());
+
+	d_conv_reduce[item.get_group(0)] = sycl::reduce_over_group(item.get_group(), tmp, sycl::plus<TYPE>());
+}
+
 void jac_solver_first(sycl::nd_item<1> item, int Ndim, int Ndim_round, TYPE* A, TYPE* d_xold, TYPE* A_reduce, int world_size)
 {
 	// blockIdx.x * blockDim.x + threadIdx.x
@@ -110,8 +155,8 @@ void jac_solver_first(sycl::nd_item<1> item, int Ndim, int Ndim_round, TYPE* A, 
 
 		if (i != j)
 			A_reduce[i * Ndim_round + j] = A[i * Ndim + j] * d_xold[j];
-		else
-			A_reduce[i * Ndim_round + i] = 0;
+		// else
+		// 	A_reduce[i * Ndim_round + i] = 0;
 	}
 }
 
@@ -159,25 +204,6 @@ void reduce(sycl::nd_item<1> item, TYPE *d_val, TYPE *d_arr_reduce, int size)
 	if (idx == 0) d_val[0] = d_arr_reduce[0];
 }
 
-void reduce_A(sycl::nd_item<1> item, int i, TYPE *d_val, TYPE *d_arr_reduce, int size)
-{
-	// reduce d_arr_reduce
-	int idx = item.get_local_id(0);
-	int cal_size = size / 2;
-
-	while (cal_size > 0)
-	{
-		if (idx < cal_size)
-		{
-			d_arr_reduce[i * size + idx] += d_arr_reduce[i * size + idx + cal_size];
-		}
-		cal_size /= 2;
-
-		sycl::group_barrier(item.get_group());
-	}
-
-	if (idx == 0) d_val[i] = d_arr_reduce[i * size];
-}
 
 int main(int argc, char **argv)
 {
@@ -282,7 +308,8 @@ int main(int argc, char **argv)
 	//
 	TYPE conv = LARGE;
 	int threads_per_block = 256;
-	int blocks_per_grid = ceil(Ndim / (TYPE) threads_per_block);
+	// int blocks_per_grid = ceil(Ndim / (TYPE) threads_per_block);
+	int blocks_per_grid = 32 * 32;
 	int reduce_blocks_per_grid = round_up_power_of_2(blocks_per_grid);	// round up to the nearest power of 2
 
 	std::cout << "blocks_per_grid: " << blocks_per_grid << " " << "reduce_blocks_per_grid: " << reduce_blocks_per_grid << "\n";
@@ -312,54 +339,10 @@ int main(int argc, char **argv)
 
 				h.parallel_for(sycl::nd_range<1>(blocks * threads, threads), [=](sycl::nd_item<1> item) [[sycl::reqd_sub_group_size(32)]]
 				{	
-					// jalc_solver_main(item, Ndim, d_A, d_b, d_xnew, d_xold, d_conv, d_conv_reduce);
-					jac_solver_first(item, Ndim, Ndim_round, d_A, d_xold, d_A_reduce, blocks_per_grid * threads_per_block);
+					// jac_solver_first(item, Ndim, Ndim_round, d_A, d_xold, d_A_reduce, blocks_per_grid * threads_per_block);
+					jac_solver_main(item, Ndim, Ndim_round, d_A, d_b, d_xnew, d_xold, d_A_reduce, d_conv_reduce, blocks_per_grid * threads_per_block);
 
 					// out << d_A_reduce[0] << "\n";
-				}); 
-			});
-
-			// q.wait();
-
-			
-			q.submit([&](sycl::handler &h)
-			{
-				// sycl::stream out(1024, 256, h); //output buffer
-
-				h.parallel_for(sycl::nd_range<1>(Ndim_round / 2, Ndim_round / 2), [=](sycl::nd_item<1> item) [[sycl::reqd_sub_group_size(32)]]
-				{	
-					for (int i = 0; i < Ndim; i++)
-						reduce(item, d_xnew + i, d_A_reduce + i * Ndim_round, Ndim_round);
-				}); 
-			});
-			
-
-			// q.submit([&](sycl::handler &h)
-			// {
-			// 	sycl::stream out(1024, 256, h); //output buffer
-
-			// 	h.parallel_for(sycl::nd_range<1>(Ndim, Ndim), [=](sycl::nd_item<1> item) [[sycl::reqd_sub_group_size(32)]]
-			// 	{	
-			// 		int idx = item.get_local_id(0);
-			// 		d_xnew[idx] = 0.0;
-
-			// 		for (int i = 0; i < Ndim; i++)
-			// 		{
-			// 			d_xnew[idx] += d_A_reduce[idx * Ndim_round + i];
-			// 			if (idx == 0) out << d_xnew[idx] << "\n";
-			// 		}
-			// 	}); 
-			// });
-
-			// q2.wait();	// wait for all reduction over
-
-			q.submit([&](sycl::handler &h)
-			{
-				// sycl::stream out(1024, 256, h); //output buffer
-
-				h.parallel_for(sycl::nd_range<1>(blocks * threads, threads), [=](sycl::nd_item<1> item) [[sycl::reqd_sub_group_size(32)]]
-				{	
-					jac_solver_last(item, Ndim, d_A, d_b, d_xnew, d_xold, d_conv_reduce);
 				}); 
 			});
 
@@ -381,47 +364,8 @@ int main(int argc, char **argv)
 
 				h.parallel_for(sycl::nd_range<1>(blocks * threads, threads), [=](sycl::nd_item<1> item) [[sycl::reqd_sub_group_size(32)]]
 				{	
-					// jalc_solver_main(item, Ndim, d_A, d_b, d_xold, d_xnew, d_conv, d_conv_reduce);
-					jac_solver_first(item, Ndim, Ndim_round, d_A, d_xnew, d_A_reduce, blocks_per_grid * threads_per_block);
-				}); 
-			});
-
-			// q.wait();
-
-			q.submit([&](sycl::handler &h)
-			{
-				// sycl::stream out(1024, 256, h); //output buffer
-
-				h.parallel_for(sycl::nd_range<1>(Ndim_round / 2, Ndim_round / 2), [=](sycl::nd_item<1> item) [[sycl::reqd_sub_group_size(32)]]
-				{	
-					for (int i = 0; i < Ndim; i++)
-						reduce(item, d_xold + i, d_A_reduce + i * Ndim_round, Ndim_round);
-				}); 
-			});
-
-			// q.submit([&](sycl::handler &h)
-			// {
-			// 	h.parallel_for(sycl::nd_range<1>(Ndim, Ndim), [=](sycl::nd_item<1> item) [[sycl::reqd_sub_group_size(32)]]
-			// 	{	
-			// 		int idx = item.get_local_id(0);
-			// 		d_xold[idx] = 0.0;
-
-			// 		for (int i = 0; i < Ndim; i++)
-			// 		{
-			// 			d_xold[idx] += d_A_reduce[idx * Ndim_round + i];
-			// 		}
-			// 	}); 
-			// });
-
-			// q2.wait();	// wait for all reduction over
-
-			q.submit([&](sycl::handler &h)
-			{
-				// sycl::stream out(1024, 256, h); //output buffer
-
-				h.parallel_for(sycl::nd_range<1>(blocks * threads, threads), [=](sycl::nd_item<1> item) [[sycl::reqd_sub_group_size(32)]]
-				{	
-					jac_solver_last(item, Ndim, d_A, d_b, d_xold, d_xnew, d_conv_reduce);
+					// jac_solver_first(item, Ndim, Ndim_round, d_A, d_xnew, d_A_reduce, blocks_per_grid * threads_per_block);
+					jac_solver_main(item, Ndim, Ndim_round, d_A, d_b, d_xold, d_xnew, d_A_reduce, d_conv_reduce, blocks_per_grid * threads_per_block);
 				}); 
 			});
 
