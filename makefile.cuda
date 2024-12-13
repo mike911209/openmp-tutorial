@@ -1,0 +1,26 @@
+NVCC        = nvcc
+NVCCLINKER  = $(NVCC)
+OPTFLAGS    = -O3
+LIBS        = -lm
+
+NVCCFLAGS   = $(OPTFLAGS)
+
+OBJ=o
+RM=@rm -f
+
+EXE=jac_solv
+JAC_OBJ=jac_solv.o
+
+all: $(EXE)
+
+jac_solv: $(JAC_OBJ)
+	$(NVCCLINKER) $(NVCCFLAGS) -o jac_solv $(JAC_OBJ) $(LIBS)
+
+clean:
+	$(RM) $(EXE) *.o *.ptx *.cub
+
+.SUFFIXES:
+.SUFFIXES: .cu .o
+
+.cu.o:
+	$(NVCC) $(NVCCFLAGS) -c $<
