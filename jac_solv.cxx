@@ -43,6 +43,9 @@
 
 using TYPE = _TYPE;
 
+std::mt19937 rng(std::random_device{}());
+std::uniform_int_distribution<int> uid(0, RAND_MAX);
+
 void init_diag_dom_near_identity_matrix(const int Ndim, TYPE *const A)
 {
     // Create a random, diagonally dominant matrix.  For
@@ -50,8 +53,6 @@ void init_diag_dom_near_identity_matrix(const int Ndim, TYPE *const A)
     // of each row is great than the sum of the other
     // elements in the row.  Then scale the matrix so the
     // result is near the identiy matrix.
-    static std::mt19937 rng(std::random_device{}());
-    static std::uniform_int_distribution<int> uid(0, RAND_MAX);
     for (int i = 0; i < Ndim; i++)
     {
         TYPE sum = 0.0;
@@ -133,10 +134,10 @@ int main(int argc, char **argv)
     {
         xnew[i] = 0.0;
         xold[i] = 0.0;
-        b[i] = (rand() % 51) / 100.0;
+        b[i] = (uid(rng) % 51) / 100.0;
     }
 
-    const cl::Device dev = get_device_list().front();
+    const cl::Device dev = get_device_list()[dev_idx];
     std::cout << "\nUsing OpenCL device: " << dev.getInfo<CL_DEVICE_NAME>() << '\n';
     
     const cl::Context ctx({dev});
@@ -151,8 +152,8 @@ int main(int argc, char **argv)
     const cl::Buffer d_A(ctx, CL_MEM_READ_ONLY, sizeof(TYPE) * Ndim * Ndim),
                      d_b(ctx, CL_MEM_READ_ONLY, sizeof(TYPE) * Ndim),
                      d_conv(ctx, CL_MEM_WRITE_ONLY, sizeof(TYPE) * (Ndim / conv_wgsize));
-     cl::Buffer d_xnew(ctx, CL_MEM_READ_WRITE, sizeof(TYPE) * Ndim),
-                d_xold(ctx, CL_MEM_READ_WRITE, sizeof(TYPE) * Ndim);
+    cl::Buffer d_xnew(ctx, CL_MEM_READ_WRITE, sizeof(TYPE) * Ndim),
+               d_xold(ctx, CL_MEM_READ_WRITE, sizeof(TYPE) * Ndim);
     
     cmdQ.enqueueWriteBuffer(d_A, CL_FALSE, 0, sizeof(TYPE) * Ndim * Ndim, A);
     cmdQ.enqueueWriteBuffer(d_b, CL_FALSE, 0, sizeof(TYPE) * Ndim, b);
@@ -192,7 +193,7 @@ int main(int argc, char **argv)
         std::swap(d_xnew, d_xold);
     }
     cmdQ.finish();
-    const auto elapsed_time = std::chrono::duration_cast<std::chrono::seconds>(std::chrono::steady_clock::now() - start_time);
+    const std::chrono::duration<double> elapsed_time = std::chrono::steady_clock::now() - start_time;
     std::cout << " Convergence = " << conv << " with " << iters << " iterations and " << elapsed_time.count() << " seconds\n";
 
     //
