@@ -44,6 +44,8 @@ extern SYCL_EXTERNAL int rand(void);
 #define DEF_SIZE 1000
 #define MAX_ITERS 100000
 #define LARGE 1000000.0
+#define BLOCKS_PER_GRID 1024  // 32 * 32
+#define THREADS_PER_BLOCK 256
 
 #define DEBUG    1     // output a small subset of intermediate values
 // #define VERBOSE  1
@@ -184,24 +186,31 @@ void jac_solver_last(sycl::nd_item<1> item, int Ndim, TYPE* A, TYPE* b, TYPE* d_
 	d_conv_reduce[item.get_group(0)] = sycl::reduce_over_group(item.get_group(), tmp, sycl::plus<TYPE>());
 }
 
-void reduce(sycl::nd_item<1> item, TYPE *d_val, TYPE *d_arr_reduce, int size)
+void reduce(sycl::nd_item<1> item, TYPE *d_val, TYPE *d_arr_reduce, TYPE *shm_arr_reduce, int size)
 {
 	// reduce d_arr_reduce
 	int idx = item.get_local_id(0);
 	int cal_size = size / 2;
 
+	// move to shared memory and process first round
+	shm_arr_reduce[idx] = d_arr_reduce[idx];
+	shm_arr_reduce[idx] += d_arr_reduce[idx + cal_size];
+	cal_size /= 2;
+
+	sycl::group_barrier(item.get_group());
+
 	while (cal_size > 0)
 	{
 		if (idx < cal_size)
 		{
-			d_arr_reduce[idx] += d_arr_reduce[idx + cal_size];
+			shm_arr_reduce[idx] += shm_arr_reduce[idx + cal_size];
 		}
 		cal_size /= 2;
 
 		sycl::group_barrier(item.get_group());
 	}
 
-	if (idx == 0) d_val[0] = d_arr_reduce[0];
+	if (idx == 0) d_val[0] = shm_arr_reduce[0];
 }
 
 
@@ -307,9 +316,9 @@ int main(int argc, char **argv)
 	// jacobi iterative solver
 	//
 	TYPE conv = LARGE;
-	int threads_per_block = 256;
+	int threads_per_block = THREADS_PER_BLOCK;
 	// int blocks_per_grid = ceil(Ndim / (TYPE) threads_per_block);
-	int blocks_per_grid = 32 * 32;
+	int blocks_per_grid = BLOCKS_PER_GRID;
 	int reduce_blocks_per_grid = round_up_power_of_2(blocks_per_grid);	// round up to the nearest power of 2
 
 	std::cout << "blocks_per_grid: " << blocks_per_grid << " " << "reduce_blocks_per_grid: " << reduce_blocks_per_grid << "\n";
@@ -349,10 +358,11 @@ int main(int argc, char **argv)
 			q.submit([&](sycl::handler &h)
 			{
 				// sycl::stream out(1024, 256, h); //output buffer
+				sycl::local_accessor<TYPE> shm_acc(sycl::range<1>(BLOCKS_PER_GRID), h);
 
 				h.parallel_for(sycl::nd_range<1>(reduce_blocks_per_grid / 2, reduce_blocks_per_grid / 2), [=](sycl::nd_item<1> item) [[sycl::reqd_sub_group_size(32)]]
 				{	
-					reduce(item, d_conv, d_conv_reduce, reduce_blocks_per_grid);
+					reduce(item, d_conv, d_conv_reduce, shm_acc.get_pointer(), reduce_blocks_per_grid);
 				}); 
 			});
 		}
@@ -372,10 +382,11 @@ int main(int argc, char **argv)
 			q.submit([&](sycl::handler &h)
 			{
 				// sycl::stream out(1024, 256, h); //output buffer
+				sycl::local_accessor<TYPE> shm_acc(sycl::range<1>(BLOCKS_PER_GRID), h);
 
 				h.parallel_for(sycl::nd_range<1>(reduce_blocks_per_grid / 2, reduce_blocks_per_grid / 2), [=](sycl::nd_item<1> item) [[sycl::reqd_sub_group_size(32)]]
 				{	
-					reduce(item, d_conv, d_conv_reduce, reduce_blocks_per_grid);
+					reduce(item, d_conv, d_conv_reduce, shm_acc.get_pointer(), reduce_blocks_per_grid);
 				}); 
 			});
 		}
