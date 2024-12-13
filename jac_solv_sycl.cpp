@@ -460,9 +460,11 @@ int main(int argc, char **argv)
 	// free(b);
 	// free(xold);
 	// free(xnew);
-	// sycl::free(d_A, q);
-	// sycl::free(d_b, q);
-	// sycl::free(d_xold, q);
-	// sycl::free(d_xnew, q);
-	// sycl::free(d_conv, q);
+	sycl::free(d_A, q);
+	sycl::free(d_b, q);
+	sycl::free(d_xold, q);
+	sycl::free(d_xnew, q);
+	sycl::free(d_conv, q);
+	sycl::free(d_conv_reduce, q);
+	sycl::free(d_A_reduce, q);
 }
