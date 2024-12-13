@@ -1,26 +1,26 @@
 CXX         = c++
 CXXLINKER   = $(CXX)
 OPTFLAGS    = -Ofast
-LIBS        = -L/opt/cuda/12.1/lib64 -lOpenGL -lm
+LIBS        = -L/opt/cuda/12.1/lib64 -lOpenCL -lm
 
 CXXFLAGS    = -I/opt/cuda/12.1/include $(OPTFLAGS)
 
 OBJ=o
 RM=@rm -f
 
-EXES=jac_solv
-JAC_OBJS  = jac_solv.$(OBJ)
+EXE=jac_solv
+JAC_OBJ=jac_solv.o
 
-all: $(EXES)
+all: $(EXE)
 
-jac_solv: $(JAC_OBJS)
-	$(CXXLINKER) $(CXXFLAGS) -o jac_solv $(JAC_OBJS) $(LIBS)
+jac_solv: $(JAC_OBJ)
+	$(CXXLINKER) $(CXXFLAGS) -o jac_solv $(JAC_OBJ) $(LIBS)
 
 clean:
-	$(RM) $(EXES) *.$(OBJ) *.ptx *.cub
+	$(RM) $(EXES) *.o *.ptx *.cub
 
 .SUFFIXES:
-.SUFFIXES: .cxx .$(OBJ)
+.SUFFIXES: .cxx .o
 
-.cxx.$(OBJ):
+.cxx.o:
 	$(CXX) $(CXXFLAGS) -c $<
