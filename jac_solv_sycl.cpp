@@ -47,7 +47,7 @@ extern SYCL_EXTERNAL int rand(void);
 #define BLOCKS_PER_GRID 1024  // 32 * 32
 #define THREADS_PER_BLOCK 256
 
-#define DEBUG    1     // output a small subset of intermediate values
+// #define DEBUG    1     // output a small subset of intermediate values
 // #define VERBOSE  1
 
 int round_up_power_of_2(int v)
@@ -61,37 +61,6 @@ int round_up_power_of_2(int v)
 	v++;
 
 	return v;
-}
-
-void init_diag_dom_near_identity_matrix_sycl(int Ndim, TYPE *A, sycl::id<1> idx, int size)
-{
-
-	int i, j;
-	TYPE sum;
-
-	// idx ranges from 0 to Ndim
-
-	//
-	// Create a random, diagonally dominant matrix.  For
-	// a diagonally dominant matrix, the diagonal element
-	// of each row is great than the sum of the other
-	// elements in the row.  Then scale the matrix so the
-	// result is near the identiy matrix.
-
-	for (i = idx; i < Ndim; i += size)
-	{
-		sum = (TYPE)0.0;
-		for (j = 0; j < Ndim; j++)
-		{
-			*(A + i * Ndim + j) = (rand() % 23) / (TYPE)1000.0;
-			sum += *(A + i * Ndim + j);
-		}
-		*(A + i * Ndim + i) += sum;
-
-		// scale the row so the final matrix is almost an identity matrix;wq
-		for (j = 0; j < Ndim; j++)
-			*(A + i * Ndim + j) /= sum;
-	}
 }
 
 void jac_solver_main(sycl::nd_item<1> item, int Ndim, int Ndim_round, TYPE* A, TYPE* b, TYPE* d_xnew, TYPE* d_xold, TYPE* A_reduce, TYPE* d_conv_reduce, int world_size)
@@ -139,78 +108,24 @@ void jac_solver_main(sycl::nd_item<1> item, int Ndim, int Ndim_round, TYPE* A, T
 	d_conv_reduce[item.get_group(0)] = sycl::reduce_over_group(item.get_group(), tmp, sycl::plus<TYPE>());
 }
 
-void jac_solver_first(sycl::nd_item<1> item, int Ndim, int Ndim_round, TYPE* A, TYPE* d_xold, TYPE* A_reduce, int world_size)
-{
-	// blockIdx.x * blockDim.x + threadIdx.x
-	int rank = item.get_group(0) * item.get_local_range().get(0) + item.get_local_id(0);
-	TYPE test;
-
-	// out << rank << " " << world_size << " " << Ndim << " " << Ndim_round << "\n";
-
-	// *d_conv = 0.0;
-	for (int idx = rank; idx < Ndim * Ndim; idx += world_size)
-	{
-		int i = idx / Ndim;
-		int j = idx % Ndim;
-
-		// d_xnew[idx] = 0.0;
-
-		if (i != j)
-			A_reduce[i * Ndim_round + j] = A[i * Ndim + j] * d_xold[j];
-		// else
-		// 	A_reduce[i * Ndim_round + i] = 0;
-	}
-}
-
-void jac_solver_last(sycl::nd_item<1> item, int Ndim, TYPE* A, TYPE* b, TYPE* d_xnew, TYPE* d_xold, TYPE* d_conv_reduce)
-{
-	// blockIdx.x * blockDim.x + threadIdx.x
-	int idx = item.get_group(0) * item.get_local_range().get(0) + item.get_local_id(0);
-	TYPE tmp;
-
-	if (idx < Ndim)
-	{
-		d_xnew[idx] = (b[idx] - d_xnew[idx]) / A[idx * Ndim + idx];
-
-		// test convergence
-		tmp = d_xnew[idx] - d_xold[idx];
-		tmp = tmp * tmp;
-	}
-	else
-	{
-		tmp = 0.0;
-	}
-
-	sycl::group_barrier(item.get_group());
-
-	d_conv_reduce[item.get_group(0)] = sycl::reduce_over_group(item.get_group(), tmp, sycl::plus<TYPE>());
-}
-
-void reduce(sycl::nd_item<1> item, TYPE *d_val, TYPE *d_arr_reduce, TYPE *shm_arr_reduce, int size)
+void reduce(sycl::nd_item<1> item, TYPE *d_val, TYPE *d_arr_reduce, int size)
 {
 	// reduce d_arr_reduce
 	int idx = item.get_local_id(0);
 	int cal_size = size / 2;
 
-	// move to shared memory and process first round
-	shm_arr_reduce[idx] = d_arr_reduce[idx];
-	shm_arr_reduce[idx] += d_arr_reduce[idx + cal_size];
-	cal_size /= 2;
-
-	sycl::group_barrier(item.get_group());
-
 	while (cal_size > 0)
 	{
 		if (idx < cal_size)
 		{
-			shm_arr_reduce[idx] += shm_arr_reduce[idx + cal_size];
+			d_arr_reduce[idx] += d_arr_reduce[idx + cal_size];
 		}
 		cal_size /= 2;
 
 		sycl::group_barrier(item.get_group());
 	}
 
-	if (idx == 0) d_val[0] = shm_arr_reduce[0];
+	if (idx == 0) d_val[0] = d_arr_reduce[0];
 }
 
 
@@ -223,19 +138,16 @@ int main(int argc, char **argv)
 	TYPE *A, *b, *xnew, *xold;
 	TYPE *d_A, *d_A_reduce, *d_b, *d_xnew, *d_xold;
 
-	// cpu queue
-	// sycl::queue q;
-	// std::cout << "Running on " << q.get_device().get_info<sycl::info::device::name>() << "\n";
 
 	// gpu queue
 	sycl::device d(sycl::gpu_selector_v);
 	sycl::context c(d);
 	sycl::queue q(c, d, sycl::property::queue::in_order{});
-	sycl::queue q2(c, d);
-	std::cout << "Running on " << q.get_device().get_info<sycl::info::device::name>() << "\n";
 
-	// start timing
-	auto start = std::chrono::steady_clock::now();
+	// cpu queue
+	// sycl::queue q;
+
+	std::cout << "Running on " << q.get_device().get_info<sycl::info::device::name>() << "\n";
 
 	// set matrix dimensions and allocate memory for matrices
 	if (argc == 2)
@@ -248,17 +160,18 @@ int main(int argc, char **argv)
 	}
 
 	Ndim_round = round_up_power_of_2(Ndim);
-	printf(" ndim = %d\n", Ndim);
-	printf(" ndim Round = %d\n", Ndim_round);
+	std::cout << "Ndim: " << Ndim << "\n" << "Ndim_round: " << Ndim_round << "\n";
 
 	A = (TYPE *)malloc(Ndim * Ndim * sizeof(TYPE));
 	b = (TYPE *)malloc(Ndim * sizeof(TYPE));
 	xnew = (TYPE *)malloc(Ndim * sizeof(TYPE));
 	xold = (TYPE *)malloc(Ndim * sizeof(TYPE));
-	// TYPE A[Ndim * Ndim];
-	// TYPE b[Ndim];
-	// TYPE xnew[Ndim];
-	// TYPE xold[Ndim];
+
+	if (!A || !b || !xold || !xnew)
+    {
+        std::cout << "Memory allocation error! \n";
+        exit(-1);
+    }
 
 	// malloc on device
 	d_A = sycl::malloc_device<TYPE>(Ndim * Ndim, q);
@@ -267,30 +180,8 @@ int main(int argc, char **argv)
 	d_xnew = sycl::malloc_device<TYPE>(Ndim, q);
 	d_xold = sycl::malloc_device<TYPE>(Ndim, q);
 
-	// if (!A || !b || !xold || !xnew)
-	// {
-	// 	printf("\n memory allocation error\n");
-	// 	exit(-1);
-	// }
-
-	// q.memcpy(d_A, A, Ndim * Ndim * sizeof(TYPE));
-
-	// // generate our diagonally dominant matrix, A
-	// q.submit([&](sycl::handler& h) {
-	// 	// sycl::stream out(1024, 256, h); //output buffer
-
-	// 	h.parallel_for(sycl::range<1>(8), [=](sycl::id<1> idx)
-	// 	{
-	// 		init_diag_dom_near_identity_matrix_sycl(Ndim, d_A, idx, 8);
-	// 	});
-	// });
-
-	// q.wait();
-	// q.memcpy(A, d_A, Ndim * Ndim * sizeof(TYPE)).wait();
-
-	// std::cout << A[0] << "\n";
+	// initialize A matrix
 	init_diag_dom_near_identity_matrix(Ndim, A);
-	// std::cout << A[0] << "\n";
 
 #ifdef VERBOSE
 	mm_print(Ndim, Ndim, A);
@@ -311,7 +202,9 @@ int main(int argc, char **argv)
 	q.memset(d_xnew, 0, Ndim * sizeof(TYPE));
 	q.memset(d_xold, 0, Ndim * sizeof(TYPE));
 
-	// start_time = omp_get_wtime();
+	// start timing
+	auto start = std::chrono::steady_clock::now();
+
 	//
 	// jacobi iterative solver
 	//
@@ -337,9 +230,6 @@ int main(int argc, char **argv)
 	{
 		iters++;
 
-		// q.memcpy(d_xnew, xnew, Ndim * sizeof(TYPE));
-		// q.memcpy(d_xold, xold, Ndim * sizeof(TYPE));
-
 		if ((iters & 1) == 0)
 		{
 			q.submit([&](sycl::handler &h)
@@ -348,7 +238,6 @@ int main(int argc, char **argv)
 
 				h.parallel_for(sycl::nd_range<1>(blocks * threads, threads), [=](sycl::nd_item<1> item) [[sycl::reqd_sub_group_size(32)]]
 				{	
-					// jac_solver_first(item, Ndim, Ndim_round, d_A, d_xold, d_A_reduce, blocks_per_grid * threads_per_block);
 					jac_solver_main(item, Ndim, Ndim_round, d_A, d_b, d_xnew, d_xold, d_A_reduce, d_conv_reduce, blocks_per_grid * threads_per_block);
 
 					// out << d_A_reduce[0] << "\n";
@@ -358,11 +247,11 @@ int main(int argc, char **argv)
 			q.submit([&](sycl::handler &h)
 			{
 				// sycl::stream out(1024, 256, h); //output buffer
-				sycl::local_accessor<TYPE> shm_acc(sycl::range<1>(BLOCKS_PER_GRID), h);
+				// sycl::local_accessor<TYPE> shm_acc(sycl::range<1>(BLOCKS_PER_GRID), h);
 
 				h.parallel_for(sycl::nd_range<1>(reduce_blocks_per_grid / 2, reduce_blocks_per_grid / 2), [=](sycl::nd_item<1> item) [[sycl::reqd_sub_group_size(32)]]
 				{	
-					reduce(item, d_conv, d_conv_reduce, shm_acc.get_pointer(), reduce_blocks_per_grid);
+					reduce(item, d_conv, d_conv_reduce, reduce_blocks_per_grid);
 				}); 
 			});
 		}
@@ -374,7 +263,6 @@ int main(int argc, char **argv)
 
 				h.parallel_for(sycl::nd_range<1>(blocks * threads, threads), [=](sycl::nd_item<1> item) [[sycl::reqd_sub_group_size(32)]]
 				{	
-					// jac_solver_first(item, Ndim, Ndim_round, d_A, d_xnew, d_A_reduce, blocks_per_grid * threads_per_block);
 					jac_solver_main(item, Ndim, Ndim_round, d_A, d_b, d_xold, d_xnew, d_A_reduce, d_conv_reduce, blocks_per_grid * threads_per_block);
 				}); 
 			});
@@ -382,11 +270,11 @@ int main(int argc, char **argv)
 			q.submit([&](sycl::handler &h)
 			{
 				// sycl::stream out(1024, 256, h); //output buffer
-				sycl::local_accessor<TYPE> shm_acc(sycl::range<1>(BLOCKS_PER_GRID), h);
+				// sycl::local_accessor<TYPE> shm_acc(sycl::range<1>(BLOCKS_PER_GRID), h);
 
 				h.parallel_for(sycl::nd_range<1>(reduce_blocks_per_grid / 2, reduce_blocks_per_grid / 2), [=](sycl::nd_item<1> item) [[sycl::reqd_sub_group_size(32)]]
 				{	
-					reduce(item, d_conv, d_conv_reduce, shm_acc.get_pointer(), reduce_blocks_per_grid);
+					reduce(item, d_conv, d_conv_reduce, reduce_blocks_per_grid);
 				}); 
 			});
 		}
@@ -394,39 +282,18 @@ int main(int argc, char **argv)
 		q.wait();
 		q.memcpy(&conv, d_conv, 1 * sizeof(TYPE)).wait();
 
-		conv = sqrt((double)conv);
-
 		//
 		// test convergence
 		//
-		// conv = 0.0;
-		// if ((iters & 1) == 0)
-		// {
-		// 	for (int i = 0; i < Ndim; i++) {
-		// 		TYPE tmp = xnew[i] - xold[i];
-		// 		conv += tmp * tmp;
-		// 	}
-		// }
-		// else
-		// {
-		// 	for (int i = 0; i < Ndim; i++) {
-		// 		TYPE tmp = xold[i] - xnew[i];
-		// 		conv += tmp * tmp;
-		// 	}
-		// }
-
-		// conv = sqrt((double)conv);
+		conv = sqrt((double)conv);
 #ifdef DEBUG
 		printf(" conv = %f \n", (float)conv);
 #endif
-
-		// TYPE* tmp = xold;
-		// xold = xnew;
-		// xnew = tmp;
-
-		// if (iters == 2)	break;
 	}
-	// elapsed_time = omp_get_wtime() - start_time;
+
+	// stop timing
+	auto end = std::chrono::steady_clock::now();
+
 	printf(" Convergence = %g with %d iterations and %f seconds\n", (float)conv,
 		   iters, (float)elapsed_time);
 
@@ -455,9 +322,6 @@ int main(int argc, char **argv)
 	}
 	err = sqrt((double)err);
 
-	// stop timing
-	auto end = std::chrono::steady_clock::now();
-
 	printf("jacobi solver: err = %f, solution checksum = %f \n", (float)err,
 		   (float)chksum);
 	if (err > TOLERANCE)
@@ -467,10 +331,11 @@ int main(int argc, char **argv)
 	std::chrono::duration<double> elapsed_seconds = end - start;
 	printf("elapsed time: %f seconds\n", elapsed_seconds.count());
 
-	// free(A);
-	// free(b);
-	// free(xold);
-	// free(xnew);
+	// free memory
+	free(A);
+	free(b);
+	free(xold);
+	free(xnew);
 	sycl::free(d_A, q);
 	sycl::free(d_b, q);
 	sycl::free(d_xold, q);
