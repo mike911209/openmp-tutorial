@@ -144,7 +144,7 @@ int main(int argc, char **argv)
     const cl::CommandQueue cmdQ(ctx, dev);
 
     const cl::Program prog(ctx, get_kernel_string());
-    prog.build("-DTYPE="STR(_TYPE));
+    prog.build("-cl-finite-math-only -cl-unsafe-math-optimizations -DTYPE="STR(_TYPE));
 
     cl::Kernel jacobi(prog, "jacobi"),
                convergence(prog, "convergence");
