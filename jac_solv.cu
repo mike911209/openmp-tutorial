@@ -107,15 +107,15 @@ int main(int argc, char **argv)
 {
     // set matrix dimensions and allocate memory for matrices
     const int Ndim = argc > 1 ? atoi(argv[1]) : DEF_SIZE, // A[Ndim][Ndim]
-              wgsize = argc > 2 ? atoi(argv[2]) : 64,
-              conv_wgsize = argc > 2 ? atoi(argv[2]) : 64,
+              bs = argc > 2 ? atoi(argv[2]) : 64,
+              conv_bs = argc > 2 ? atoi(argv[2]) : 64,
               dev_idx = argc > 3 ? atoi(argv[3]) : 0;
     TYPE err, chksum,
          *const A = new TYPE[Ndim * Ndim],
          *const b = new TYPE[Ndim],
          *xnew = new TYPE[Ndim],
          *xold = new TYPE[Ndim],
-         *const conv_temp = new TYPE[Ndim / conv_wgsize],
+         *const conv_temp = new TYPE[Ndim / conv_bs],
          *d_A, *d_b, *d_xnew, *d_xold, *d_conv;
 
     std::cout << " ndim = " << Ndim << '\n';
@@ -145,7 +145,7 @@ int main(int argc, char **argv)
     cudaMalloc(&d_b, sizeof(TYPE) * Ndim);
     cudaMalloc(&d_xnew, sizeof(TYPE) * Ndim);
     cudaMalloc(&d_xold, sizeof(TYPE) * Ndim);
-    cudaMalloc(&d_conv, sizeof(TYPE) * (Ndim / conv_wgsize));
+    cudaMalloc(&d_conv, sizeof(TYPE) * (Ndim / conv_bs));
 
     cudaMemcpy(d_A, A, sizeof(TYPE) * Ndim * Ndim, cudaMemcpyHostToDevice);
     cudaMemcpy(d_b, b, sizeof(TYPE) * Ndim, cudaMemcpyHostToDevice);
@@ -162,13 +162,13 @@ int main(int argc, char **argv)
     {
         iters++;
 
-        jacobi<<<Ndim / wgsize, wgsize>>>(Ndim, d_A, d_b, d_xold, d_xnew);
+        jacobi<<<Ndim / bs, bs>>>(Ndim, d_A, d_b, d_xold, d_xnew);
         //
         // test convergence
         //
-        convergence<<<Ndim / conv_wgsize, conv_wgsize, sizeof(TYPE) * conv_wgsize>>>(d_xnew, d_xold, d_conv);
-        cudaMemcpy(conv_temp, d_conv, sizeof(TYPE) * (Ndim / conv_wgsize), cudaMemcpyDeviceToHost);
-        conv = sqrt(std::accumulate(conv_temp, conv_temp + Ndim / conv_wgsize, 0.));
+        convergence<<<Ndim / conv_bs, conv_bs, sizeof(TYPE) * conv_bs>>>(d_xnew, d_xold, d_conv);
+        cudaMemcpy(conv_temp, d_conv, sizeof(TYPE) * (Ndim / conv_bs), cudaMemcpyDeviceToHost);
+        conv = sqrt(std::accumulate(conv_temp, conv_temp + Ndim / conv_bs, 0.));
 
         std::swap(d_xnew, d_xold);
     }
