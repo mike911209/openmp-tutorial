@@ -1,0 +1,15 @@
+# for intel compiler on linux (most exercises work with icc as well)
+# copy to make.def
+CC         = icx
+CPP         = icpx
+OPTFLAGS   = -fsycl -fsycl-targets=amdgcn-amd-amdhsa -Xsycl-target-backend=amdgcn-amd-amdhsa --offload-arch=gfx90a -qopenmp -O3
+
+CLINKER     = $(CC)
+LIBS        = -lm
+
+CFLAGS    = $(OPTFLAGS)
+PRE= ./
+OBJ=o
+EXE=
+RM=rm
+
