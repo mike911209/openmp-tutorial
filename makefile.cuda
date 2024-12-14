@@ -1,6 +1,6 @@
 NVCC        = nvcc
 NVCCLINKER  = $(NVCC)
-OPTFLAGS    = -O3
+OPTFLAGS    = -Xptxas=-O4,-opt-fp-atomics,-v -Xcompiler=-fopenmp,-g0,-Ofast -O4 -dopt=on -dlto -gen-opt-lto -use_fast_math -extra-device-vectorization
 LIBS        = -lm
 
 NVCCFLAGS   = $(OPTFLAGS)

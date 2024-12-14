@@ -77,8 +77,8 @@ constexpr int DEF_SIZE = 1024,
 // #define DEBUG    1     // output a small subset of intermediate values
 // #define VERBOSE  1
 
-__global__ void jacobi(const unsigned Ndim, TYPE *A, TYPE *b, TYPE *xold, TYPE *xnew) {
-  size_t i = blockIdx.x * blockDim.x + threadIdx.x;
+__global__ void jacobi(const unsigned Ndim, TYPE *const __restrict__ A, TYPE *const __restrict__ b, TYPE *const __restrict__ xold, TYPE *const __restrict__ xnew) {
+  const size_t i = blockIdx.x * blockDim.x + threadIdx.x;
 
   xnew[i] = 0.0;
   for (int j = 0; j < Ndim; j++)
@@ -86,9 +86,9 @@ __global__ void jacobi(const unsigned Ndim, TYPE *A, TYPE *b, TYPE *xold, TYPE *
   xnew[i] = (b[i] - xnew[i]) / A[i * Ndim + i];
 }
 
-__global__ void convergence(TYPE *xold, TYPE *xnew, TYPE *conv) {
+__global__ void convergence(TYPE *const __restrict__ xold, TYPE *const __restrict__ xnew, TYPE *const __restrict__ conv) {
   extern __shared__ TYPE conv_loc[];
-  size_t i = blockIdx.x * blockDim.x + threadIdx.x;
+  const size_t i = blockIdx.x * blockDim.x + threadIdx.x;
   TYPE tmp = xnew[i] - xold[i];
   conv_loc[threadIdx.x] = tmp * tmp;
 
@@ -108,14 +108,13 @@ int main(int argc, char **argv)
     // set matrix dimensions and allocate memory for matrices
     const int Ndim = argc > 1 ? atoi(argv[1]) : DEF_SIZE, // A[Ndim][Ndim]
               bs = argc > 2 ? atoi(argv[2]) : 64,
-              conv_bs = argc > 2 ? atoi(argv[2]) : 64,
               dev_idx = argc > 3 ? atoi(argv[3]) : 0;
     TYPE err, chksum,
          *const A = new TYPE[Ndim * Ndim],
          *const b = new TYPE[Ndim],
          *xnew = new TYPE[Ndim],
          *xold = new TYPE[Ndim],
-         *const conv_temp = new TYPE[Ndim / conv_bs],
+         *const conv_temp = new TYPE[Ndim / bs],
          *d_A, *d_b, *d_xnew, *d_xold, *d_conv;
 
     std::cout << " ndim = " << Ndim << '\n';
@@ -145,7 +144,7 @@ int main(int argc, char **argv)
     cudaMalloc(&d_b, sizeof(TYPE) * Ndim);
     cudaMalloc(&d_xnew, sizeof(TYPE) * Ndim);
     cudaMalloc(&d_xold, sizeof(TYPE) * Ndim);
-    cudaMalloc(&d_conv, sizeof(TYPE) * (Ndim / conv_bs));
+    cudaMalloc(&d_conv, sizeof(TYPE) * (Ndim / bs));
 
     cudaMemcpy(d_A, A, sizeof(TYPE) * Ndim * Ndim, cudaMemcpyHostToDevice);
     cudaMemcpy(d_b, b, sizeof(TYPE) * Ndim, cudaMemcpyHostToDevice);
@@ -160,15 +159,15 @@ int main(int argc, char **argv)
     int iters = 0;
     while (conv > TOLERANCE && iters < MAX_ITERS)
     {
-        iters++;
+        ++iters;
 
         jacobi<<<Ndim / bs, bs>>>(Ndim, d_A, d_b, d_xold, d_xnew);
         //
         // test convergence
         //
-        convergence<<<Ndim / conv_bs, conv_bs, sizeof(TYPE) * conv_bs>>>(d_xnew, d_xold, d_conv);
-        cudaMemcpy(conv_temp, d_conv, sizeof(TYPE) * (Ndim / conv_bs), cudaMemcpyDeviceToHost);
-        conv = sqrt(std::accumulate(conv_temp, conv_temp + Ndim / conv_bs, 0.));
+        convergence<<<Ndim / bs, bs, sizeof(TYPE) * bs>>>(d_xnew, d_xold, d_conv);
+        cudaMemcpy(conv_temp, d_conv, sizeof(TYPE) * (Ndim / bs), cudaMemcpyDeviceToHost);
+        conv = sqrt(std::accumulate(conv_temp, conv_temp + Ndim / bs, 0.));
 
         std::swap(d_xnew, d_xold);
     }
@@ -190,7 +189,7 @@ int main(int argc, char **argv)
         xold[i] = 0.0;
         for (int j = 0; j < Ndim; j++)
             xold[i] += A[i * Ndim + j] * xnew[j];
-        TYPE tmp = xold[i] - b[i];
+        const TYPE tmp = xold[i] - b[i];
         chksum += xnew[i];
         err += tmp * tmp;
     }
