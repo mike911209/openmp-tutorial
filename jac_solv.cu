@@ -65,7 +65,7 @@ void init_diag_dom_near_identity_matrix(const int Ndim, TYPE *const A)
 #include <cmath>
 #include <fstream>
 #include <iostream>
-#include <sstream>
+#include <sstream>  
 
 #include <cuda.h>
 
@@ -79,10 +79,16 @@ constexpr int DEF_SIZE = 1024,
 
 __global__ void jacobi(const unsigned Ndim, TYPE *const __restrict__ A, TYPE *const __restrict__ b, TYPE *const __restrict__ xold, TYPE *const __restrict__ xnew) {
   const size_t i = blockIdx.x * blockDim.x + threadIdx.x;
+  extern __shared__ TYPE xold_loc[];
+  int chunk = Ndim / blockDim.x;
+  for (int j = 0; j < chunk; j++)
+    xold_loc[threadIdx.x * chunk + j] = xold[threadIdx.x * chunk + j];
+
+  __syncthreads();
 
   xnew[i] = 0.0;
   for (int j = 0; j < Ndim; j++)
-    xnew[i] += A[i * Ndim + j] * xold[j] * (i != j);
+    xnew[i] += A[i * Ndim + j] * xold_loc[j] * (i != j);
   xnew[i] = (b[i] - xnew[i]) / A[i * Ndim + i];
 }
 
@@ -161,7 +167,7 @@ int main(int argc, char **argv)
     {
         ++iters;
 
-        jacobi<<<Ndim / bs, bs>>>(Ndim, d_A, d_b, d_xold, d_xnew);
+        jacobi<<<Ndim / bs, bs, sizeof(TYPE) * Ndim>>>(Ndim, d_A, d_b, d_xold, d_xnew);
         //
         // test convergence
         //
