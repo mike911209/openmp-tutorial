@@ -100,7 +100,7 @@ __global__ void convergence(TYPE *xold, TYPE *xnew, TYPE *conv) {
     __syncthreads();
   }
   if (threadIdx.x == 0)
-    conv[threadIdx.x] = conv_loc[0];
+    conv[blockIdx.x] = conv_loc[0];
 }
 
 int main(int argc, char **argv)
