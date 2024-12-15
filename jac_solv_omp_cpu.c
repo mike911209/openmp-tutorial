@@ -132,13 +132,9 @@ int main(int argc, char **argv) {
   conv = LARGE;
   iters = 0;
 
-// #pragma omp target enter data map(to: xold[0:Ndim], xnew[0:Ndim], \
-//     A[0:Ndim*Ndim], b[0:Ndim])
-
   while ((conv > TOLERANCE) && (iters < MAX_ITERS)) {
     iters++;
 
-// #pragma omp target
 #pragma omp parallel for simd
     for (int i = 0; i < Ndim; i++) {
       xnew[i] = (TYPE)0.0;
@@ -152,7 +148,6 @@ int main(int argc, char **argv) {
     //
     conv = 0.0;
 
-// #pragma omp target map(tofrom: conv)
 #pragma omp parallel for simd reduction(+: conv)
     for (int i = 0; i < Ndim; i++) {
       TYPE tmp = xnew[i] - xold[i];
@@ -168,8 +163,6 @@ int main(int argc, char **argv) {
     xold = xnew;
     xnew = tmp;
   }
-
-// #pragma omp target exit data map(from : xold[0 : Ndim], xnew[0 : Ndim])
 
   elapsed_time = omp_get_wtime() - start_time;
   printf(" Convergence = %g with %d iterations and %f seconds\n", (float)conv,
